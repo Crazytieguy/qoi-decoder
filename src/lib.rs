@@ -54,13 +54,16 @@ impl ImageData {
         let mut bytes = Vec::new();
         input_buf.read_to_end(&mut bytes)?;
         let not_enough_bytes = "Not enough bytes to decode";
+
         let (magic, bytes) = get_next_array_chunk(&bytes).ok_or(not_enough_bytes)?;
-        assert_eq!(magic, b"qoif");
+        if magic != b"qoif" {
+            return Err("Magic bytes are not 'qoif'".into());
+        }
+
         let (width, bytes) = get_next_array_chunk(bytes).ok_or(not_enough_bytes)?;
         let (height, bytes) = get_next_array_chunk(bytes).ok_or(not_enough_bytes)?;
         let (channels, bytes) = bytes.split_first().ok_or(not_enough_bytes)?;
         let (colorspace, bytes) = bytes.split_first().ok_or(not_enough_bytes)?;
-
         let header = QOIHeader::new(
             u32::from_be_bytes(*width),
             u32::from_be_bytes(*height),
@@ -130,7 +133,9 @@ impl ImageData {
             color_index_array[pixel.hash()] = pixel;
         }
 
-        assert_eq!(bytes, END_MARKER);
+        if bytes != END_MARKER {
+            return Err("No valid end marker".into());
+        }
 
         Ok(Self { header, pixels })
     }
