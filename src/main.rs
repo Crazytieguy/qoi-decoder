@@ -2,7 +2,7 @@ use clap::Parser;
 use std::{
     error::Error,
     fs::File,
-    io::{BufReader, BufWriter, Read},
+    io::{BufReader, BufWriter},
     path::PathBuf,
 };
 /// A Quite Ok Image format decoder.
@@ -18,9 +18,8 @@ struct Cli {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Cli::parse();
-    let mut buf = Vec::new();
-    BufReader::new(File::open(args.input)?).read_to_end(&mut buf)?;
-    let image_data = qoi_decoder::ImageData::decode(&buf);
+    let input_buf = BufReader::new(File::open(args.input)?);
+    let image_data = qoi_decoder::ImageData::decode(input_buf)?;
     let out_file_buf = BufWriter::new(File::create(args.output)?);
     image_data.write_png_file(out_file_buf)?;
     Ok(())

@@ -1,7 +1,10 @@
-#![feature(split_array)]
 #![feature(destructuring_assignment)]
+#![feature(array_chunks)]
 
-use std::{error::Error, io::Write};
+use std::{
+    error::Error,
+    io::{BufRead, Write},
+};
 
 use derive_new::new;
 
@@ -42,14 +45,21 @@ pub struct ImageData {
     pixels: Vec<Pixel>,
 }
 
+fn get_next_array_chunk<T, const N: usize>(bytes: &[T]) -> Option<(&[T; N], &[T])> {
+    Some((bytes.array_chunks().next()?, &bytes[N..]))
+}
+
 impl ImageData {
-    pub fn decode(bytes: &[u8]) -> Self {
-        let (magic, bytes) = bytes.split_array_ref();
+    pub fn decode(mut input_buf: impl BufRead) -> Result<Self, Box<dyn Error>> {
+        let mut bytes = Vec::new();
+        input_buf.read_to_end(&mut bytes)?;
+        let not_enough_bytes = "Not enough bytes to decode";
+        let (magic, bytes) = get_next_array_chunk(&bytes).ok_or(not_enough_bytes)?;
         assert_eq!(magic, b"qoif");
-        let (width, bytes) = bytes.split_array_ref();
-        let (height, bytes) = bytes.split_array_ref();
-        let (channels, bytes) = bytes.split_first().unwrap();
-        let (colorspace, bytes) = bytes.split_first().unwrap();
+        let (width, bytes) = get_next_array_chunk(bytes).ok_or(not_enough_bytes)?;
+        let (height, bytes) = get_next_array_chunk(bytes).ok_or(not_enough_bytes)?;
+        let (channels, bytes) = bytes.split_first().ok_or(not_enough_bytes)?;
+        let (colorspace, bytes) = bytes.split_first().ok_or(not_enough_bytes)?;
 
         let header = QOIHeader::new(
             u32::from_be_bytes(*width),
@@ -70,16 +80,16 @@ impl ImageData {
 
         while pixels.len() < (header.width * header.height) as usize {
             let next_byte;
-            (next_byte, bytes) = bytes.split_first().unwrap();
+            (next_byte, bytes) = bytes.split_first().ok_or(not_enough_bytes)?;
             let next_byte = *next_byte;
             let pixel = if next_byte == QOI_OP_RGBA {
                 let rgba;
-                (rgba, bytes) = bytes.split_array_ref();
+                (rgba, bytes) = get_next_array_chunk(bytes).ok_or(not_enough_bytes)?;
                 let [r, g, b, a] = *rgba;
                 Pixel::new(r, g, b, a)
             } else if next_byte == QOI_OP_RGB {
                 let rgb;
-                (rgb, bytes) = bytes.split_array_ref();
+                (rgb, bytes) = get_next_array_chunk(bytes).ok_or(not_enough_bytes)?;
                 let [r, g, b] = *rgb;
                 Pixel::new(r, g, b, last_pixel(&pixels).a)
             } else if next_byte >> 6 == QOI_OP_INDEX {
@@ -99,7 +109,7 @@ impl ImageData {
                 let prev_pixel = last_pixel(&pixels);
                 let g_diff = (next_byte & 0b111111).wrapping_sub(32);
                 let rb_diff;
-                (rb_diff, bytes) = bytes.split_first().unwrap();
+                (rb_diff, bytes) = bytes.split_first().ok_or(not_enough_bytes)?;
                 let r_diff = g_diff.wrapping_add(*rb_diff >> 4).wrapping_sub(8);
                 let b_diff = g_diff.wrapping_add(*rb_diff & 0b1111).wrapping_sub(8);
                 Pixel::new(
@@ -114,7 +124,7 @@ impl ImageData {
                 (0..run_minus_one).for_each(|_| pixels.push(prev_pixel));
                 prev_pixel
             } else {
-                panic!()
+                return Err("Illegal op code".into());
             };
             pixels.push(pixel);
             color_index_array[pixel.hash()] = pixel;
@@ -122,7 +132,7 @@ impl ImageData {
 
         assert_eq!(bytes, END_MARKER);
 
-        Self { header, pixels }
+        Ok(Self { header, pixels })
     }
 
     pub fn write_png_file(&self, out_file_buf: impl Write) -> Result<(), Box<dyn Error>> {
