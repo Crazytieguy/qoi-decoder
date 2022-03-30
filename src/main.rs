@@ -1,18 +1,27 @@
+use clap::Parser;
 use std::{
+    error::Error,
     fs::File,
-    io::{self, BufReader, Read},
+    io::{BufReader, BufWriter, Read},
+    path::PathBuf,
 };
+/// A Quite Ok Image format decoder.
+#[derive(Parser, Debug)]
+#[clap(author, version, about, long_about = None)]
+struct Cli {
+    /// file to decode
+    input: PathBuf,
 
-use itertools::Itertools;
+    /// output path
+    output: PathBuf,
+}
 
-fn main() -> io::Result<()> {
-    let file = File::open("qoi_test_images/dice.qoi")?;
-    println!("{}", 0xF8F7F6);
-    BufReader::new(file)
-        .bytes()
-        .map(Result::unwrap)
-        .next_tuple()
-        .map(|(a, b, c, d)| u32::from_be_bytes([a, b, c, d]))
-        .unwrap();
+fn main() -> Result<(), Box<dyn Error>> {
+    let args = Cli::parse();
+    let mut buf = Vec::new();
+    BufReader::new(File::open(args.input)?).read_to_end(&mut buf)?;
+    let image_data = qoi_decoder::ImageData::decode(&buf);
+    let out_file_buf = BufWriter::new(File::create(args.output)?);
+    image_data.write_png_file(out_file_buf)?;
     Ok(())
 }
