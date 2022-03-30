@@ -6,19 +6,19 @@ use std::{error::Error, io::Write};
 use derive_new::new;
 
 #[derive(new)]
-pub struct QOIHeader {
-    pub width: u32,
-    pub height: u32,
-    pub channels: u8,
-    pub colorspace: u8,
+struct QOIHeader {
+    width: u32,
+    height: u32,
+    channels: u8,
+    colorspace: u8,
 }
 
 #[derive(new, Clone, Copy)]
-pub struct Pixel {
-    pub r: u8,
-    pub g: u8,
-    pub b: u8,
-    pub a: u8,
+struct Pixel {
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
 }
 
 impl Pixel {
@@ -38,8 +38,8 @@ const QOI_OP_LUMA: u8 = 0b10;
 const QOI_OP_RUN: u8 = 0b11;
 
 pub struct ImageData {
-    pub header: QOIHeader,
-    pub pixels: Vec<Pixel>,
+    header: QOIHeader,
+    pixels: Vec<Pixel>,
 }
 
 impl ImageData {
@@ -76,17 +76,12 @@ impl ImageData {
                 let rgba;
                 (rgba, bytes) = bytes.split_array_ref();
                 let [r, g, b, a] = *rgba;
-                Pixel { r, g, b, a }
+                Pixel::new(r, g, b, a)
             } else if next_byte == QOI_OP_RGB {
                 let rgb;
                 (rgb, bytes) = bytes.split_array_ref();
                 let [r, g, b] = *rgb;
-                Pixel {
-                    r,
-                    g,
-                    b,
-                    a: last_pixel(&pixels).a,
-                }
+                Pixel::new(r, g, b, last_pixel(&pixels).a)
             } else if next_byte >> 6 == QOI_OP_INDEX {
                 color_index_array[(next_byte & 0b111111) as usize]
             } else if next_byte >> 6 == QOI_OP_DIFF {
