@@ -6,10 +6,12 @@ use std::{
 };
 
 use derive_new::new;
+mod qoi_op;
 
 const END_MARKER: [u8; 8] = [0b00, 0b00, 0b00, 0b00, 0b00, 0b00, 0b00, 0b01];
 const NOT_ENOUGH_BYTES: &str = "Not enough bytes to decode";
 
+#[allow(dead_code)]
 #[derive(new)]
 struct QOIHeader {
     width: u32,
@@ -98,38 +100,32 @@ impl ImageData {
             let (next_byte, remaining) = bytes.split_next()?;
             bytes = remaining;
             let (pixel, remaining) = match next_byte {
-                // QOI_OP_RGBA
-                0b11111111 => {
+                qoi_op::RGBA => {
                     let ([r, g, b, a], remaining) = remaining.split_chunk()?;
                     (Pixel::new(r, g, b, a), remaining)
                 }
-                // QOI_OP_RGB
-                0b11111110 => {
+                qoi_op::RGB => {
                     let ([r, g, b], remaining) = remaining.split_chunk()?;
                     (Pixel::new(r, g, b, prev_pixel.a), remaining)
                 }
-                // QOI_OP_INDEX
-                0b00000000..=0b00111111 => {
+                qoi_op::INDEX::START..=qoi_op::INDEX::END => {
                     let idx = (next_byte & 0b111111) as usize;
                     (color_index_array[idx], remaining)
                 }
-                // QOI_OP_DIFF
-                0b01000000..=0b01111111 => {
+                qoi_op::DIFF::START..=qoi_op::DIFF::END => {
                     let r_diff = ((next_byte >> 4) & 0b11).wrapping_sub(2);
                     let g_diff = ((next_byte >> 2) & 0b11).wrapping_sub(2);
                     let b_diff = (next_byte & 0b11).wrapping_sub(2);
                     (prev_pixel.wrapping_add(r_diff, g_diff, b_diff), remaining)
                 }
-                // QOI_OP_LUMA
-                0b10000000..=0b10111111 => {
+                qoi_op::LUMA::START..=qoi_op::LUMA::END => {
                     let g_diff = (next_byte & 0b111111).wrapping_sub(32);
                     let (rb_diff, remaining) = bytes.split_next()?;
                     let r_diff = g_diff.wrapping_add(rb_diff >> 4).wrapping_sub(8);
                     let b_diff = g_diff.wrapping_add(rb_diff & 0b1111).wrapping_sub(8);
                     (prev_pixel.wrapping_add(r_diff, g_diff, b_diff), remaining)
                 }
-                // QOI_OP_RUN
-                0b11000000..=0b11111111 => {
+                qoi_op::RUN::START..=qoi_op::RUN::END => {
                     let run = (next_byte & 0b111111) + 1;
                     let flat_pixel = prev_pixel.flat();
                     (0..run).for_each(|_| image_data.extend_from_slice(&flat_pixel));
