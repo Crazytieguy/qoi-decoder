@@ -100,17 +100,17 @@ fn parse_image_data(mut bytes: &[u8], image_data_len: usize) -> IResult<&[u8], V
     let mut prev_pixel = Pixel::new(0, 0, 0, 255);
     let n_bit_diff = |n: usize| map(take(n), move |diff: u8| diff.wrapping_sub(1 << (n - 1)));
     while image_data.len() < image_data_len {
-        let (_, next_byte) = be_u8(bytes)?;
-        let (rest, pixel) = match next_byte {
+        let (bytes_without_op_code, op_code) = be_u8(bytes)?;
+        let (rest, pixel) = match op_code {
             RGB => {
                 let parse_chunk = tuple((be_u8, be_u8, be_u8));
                 let to_pixel = |(r, g, b)| Pixel::new(r, g, b, prev_pixel.a);
-                map(parse_chunk, to_pixel)(&bytes[1..])?
+                map(parse_chunk, to_pixel)(bytes_without_op_code)?
             }
             RGBA => {
                 let parse_chunk = tuple((be_u8, be_u8, be_u8, be_u8));
                 let to_pixel = |(r, g, b, a)| Pixel::new(r, g, b, a);
-                map(parse_chunk, to_pixel)(&bytes[1..])?
+                map(parse_chunk, to_pixel)(bytes_without_op_code)?
             }
             INDEX::START..=INDEX::END => {
                 let parse_chunk = take(6_usize);
