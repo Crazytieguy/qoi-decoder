@@ -136,7 +136,8 @@ fn parse_image_data(mut bytes: &[u8], image_data_len: usize) -> IResult<&[u8], V
             }
             RUN::START..=RUN::END => {
                 let (rest, run) = skip_two_bits!(map(take(6_usize), |v: usize| v + 1))(bytes)?;
-                (0..run).for_each(|_| image_data.extend_from_slice(&prev_pixel.flat()));
+                let flat_pixel = prev_pixel.flat();
+                (0..run).for_each(|_| image_data.extend_from_slice(&flat_pixel));
                 bytes = rest;
                 continue;
             }
