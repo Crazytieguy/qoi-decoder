@@ -101,7 +101,7 @@ fn parse_image_data(mut bytes: &[u8], image_data_len: usize) -> IResult<&[u8], V
     let mut image_data = Vec::with_capacity(image_data_len);
     let mut color_index_array = [Pixel::new(0, 0, 0, 0); 64];
     let mut prev_pixel = Pixel::new(0, 0, 0, 255);
-    let n_bit_diff = |n: usize| map(take(n), move |diff: u8| diff.wrapping_sub(1_u8 << (n - 1)));
+    let n_bit_diff = |n: usize| map(take(n), move |diff: u8| diff.wrapping_sub(1 << (n - 1)));
     while image_data.len() < image_data_len {
         let (rest, next_byte) = be_u8(bytes)?;
         let (rest, pixel) = match next_byte {
