@@ -6,10 +6,18 @@ use std::{
 };
 
 use derive_new::new;
-mod qoi_op;
+use nom::{
+    bits::{bits, complete::take},
+    bytes::complete::tag,
+    combinator::map,
+    number::complete::{be_u32, be_u8},
+    sequence::{preceded, tuple},
+    IResult,
+};
+use qoi_op_codes::*;
+mod qoi_op_codes;
 
 const END_MARKER: [u8; 8] = [0b00, 0b00, 0b00, 0b00, 0b00, 0b00, 0b00, 0b01];
-const NOT_ENOUGH_BYTES: &str = "Not enough bytes to decode";
 
 #[allow(dead_code)]
 #[derive(new)]
@@ -18,6 +26,14 @@ struct QOIHeader {
     height: u32,
     channels: u8,
     colorspace: u8,
+}
+
+impl QOIHeader {
+    fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, (width, height, channels, colorspace)) =
+            preceded(tag(b"qoif"), tuple((be_u32, be_u32, be_u8, be_u8)))(input)?;
+        Ok((input, Self::new(width, height, channels, colorspace)))
+    }
 }
 
 #[derive(new, Clone, Copy)]
@@ -48,22 +64,6 @@ impl Pixel {
     }
 }
 
-trait FunParsing {
-    fn split_chunk<const N: usize>(&self) -> Result<([u8; N], &Self), Box<dyn Error>>;
-    fn split_next(&self) -> Result<(u8, &Self), Box<dyn Error>>;
-}
-
-impl FunParsing for [u8] {
-    fn split_chunk<const N: usize>(&self) -> Result<([u8; N], &Self), Box<dyn Error>> {
-        let &chunk = self.array_chunks().next().ok_or(NOT_ENOUGH_BYTES)?;
-        Ok((chunk, &self[N..]))
-    }
-
-    fn split_next(&self) -> Result<(u8, &Self), Box<dyn Error>> {
-        let (&first, rest) = self.split_first().ok_or(NOT_ENOUGH_BYTES)?;
-        Ok((first, rest))
-    }
-}
 pub struct ImageData {
     header: QOIHeader,
     image_data: Vec<u8>,
@@ -73,75 +73,9 @@ impl ImageData {
     pub fn decode(mut input_buf: impl Read) -> Result<Self, Box<dyn Error>> {
         let mut bytes = Vec::new();
         input_buf.read_to_end(&mut bytes)?;
-
-        let (magic, bytes) = bytes.split_chunk()?;
-        if &magic != b"qoif" {
-            return Err("Magic bytes are not 'qoif'".into());
-        }
-
-        let (width, bytes) = bytes.split_chunk()?;
-        let (height, bytes) = bytes.split_chunk()?;
-        let (channels, bytes) = bytes.split_next()?;
-        let (colorspace, bytes) = bytes.split_next()?;
-        let header = QOIHeader::new(
-            u32::from_be_bytes(width),
-            u32::from_be_bytes(height),
-            channels,
-            colorspace,
-        );
-
+        let (bytes, header) = QOIHeader::parse(&bytes).map_err(|e| e.to_owned())?;
         let image_data_len = (header.width * header.height) as usize * 4;
-        let mut image_data = Vec::with_capacity(image_data_len);
-        let mut bytes = bytes;
-        let mut color_index_array = [Pixel::new(0, 0, 0, 0); 64];
-        let mut prev_pixel = Pixel::new(0, 0, 0, 255);
-
-        while image_data.len() < image_data_len {
-            let (next_byte, remaining) = bytes.split_next()?;
-            bytes = remaining;
-            let (pixel, remaining) = match next_byte {
-                qoi_op::RGBA => {
-                    let ([r, g, b, a], remaining) = remaining.split_chunk()?;
-                    (Pixel::new(r, g, b, a), remaining)
-                }
-                qoi_op::RGB => {
-                    let ([r, g, b], remaining) = remaining.split_chunk()?;
-                    (Pixel::new(r, g, b, prev_pixel.a), remaining)
-                }
-                qoi_op::INDEX::START..=qoi_op::INDEX::END => {
-                    let idx = (next_byte & 0b111111) as usize;
-                    (color_index_array[idx], remaining)
-                }
-                qoi_op::DIFF::START..=qoi_op::DIFF::END => {
-                    let r_diff = ((next_byte >> 4) & 0b11).wrapping_sub(2);
-                    let g_diff = ((next_byte >> 2) & 0b11).wrapping_sub(2);
-                    let b_diff = (next_byte & 0b11).wrapping_sub(2);
-                    (prev_pixel.wrapping_add(r_diff, g_diff, b_diff), remaining)
-                }
-                qoi_op::LUMA::START..=qoi_op::LUMA::END => {
-                    let g_diff = (next_byte & 0b111111).wrapping_sub(32);
-                    let (rb_diff, remaining) = bytes.split_next()?;
-                    let r_diff = g_diff.wrapping_add(rb_diff >> 4).wrapping_sub(8);
-                    let b_diff = g_diff.wrapping_add(rb_diff & 0b1111).wrapping_sub(8);
-                    (prev_pixel.wrapping_add(r_diff, g_diff, b_diff), remaining)
-                }
-                qoi_op::RUN::START..=qoi_op::RUN::END => {
-                    let run = (next_byte & 0b111111) + 1;
-                    let flat_pixel = prev_pixel.flat();
-                    (0..run).for_each(|_| image_data.extend_from_slice(&flat_pixel));
-                    continue;
-                }
-            };
-            image_data.extend_from_slice(&pixel.flat());
-            color_index_array[pixel.hash()] = pixel;
-            prev_pixel = pixel;
-            bytes = remaining;
-        }
-
-        if bytes != END_MARKER {
-            return Err("No valid end marker".into());
-        }
-
+        let (_, image_data) = parse_image_data(bytes, image_data_len).map_err(|e| e.to_owned())?;
         Ok(Self { header, image_data })
     }
 
@@ -152,4 +86,66 @@ impl ImageData {
         writer.write_image_data(&self.image_data)?;
         Ok(())
     }
+}
+
+macro_rules! skip_two_bits {
+    ($parser:expr) => {
+        bits::<_, _, nom::error::Error<(&[u8], usize)>, _, _>(preceded::<_, u8, _, _, _, _>(
+            take(2_usize),
+            $parser,
+        ))
+    };
+}
+
+fn parse_image_data(mut bytes: &[u8], image_data_len: usize) -> IResult<&[u8], Vec<u8>> {
+    let mut image_data = Vec::with_capacity(image_data_len);
+    let mut color_index_array = [Pixel::new(0, 0, 0, 0); 64];
+    let mut prev_pixel = Pixel::new(0, 0, 0, 255);
+    let n_bit_diff = |n: usize| map(take(n), move |diff: u8| diff.wrapping_sub(1_u8 << (n - 1)));
+    while image_data.len() < image_data_len {
+        let (rest, next_byte) = be_u8(bytes)?;
+        let (rest, pixel) = match next_byte {
+            RGB => {
+                let parse_chunk = tuple((be_u8, be_u8, be_u8));
+                let to_pixel = |(r, g, b)| Pixel::new(r, g, b, prev_pixel.a);
+                map(parse_chunk, to_pixel)(rest)?
+            }
+            RGBA => {
+                let parse_chunk = tuple((be_u8, be_u8, be_u8, be_u8));
+                let to_pixel = |(r, g, b, a)| Pixel::new(r, g, b, a);
+                map(parse_chunk, to_pixel)(rest)?
+            }
+            INDEX::START..=INDEX::END => {
+                let parse_chunk = take(6_usize);
+                let to_pixel = |idx: usize| color_index_array[idx];
+                skip_two_bits!(map(parse_chunk, to_pixel))(bytes)?
+            }
+            DIFF::START..=DIFF::END => {
+                let parse_chunk = tuple((n_bit_diff(2), n_bit_diff(2), n_bit_diff(2)));
+                let to_pixel = |(dr, dg, db)| prev_pixel.wrapping_add(dr, dg, db);
+                skip_two_bits!(map(parse_chunk, to_pixel))(bytes)?
+            }
+            LUMA::START..=LUMA::END => {
+                let parse_chunk = tuple((n_bit_diff(6), n_bit_diff(4), n_bit_diff(4)));
+                let to_pixel = |(dg, drdg, dbdg): (u8, u8, u8)| {
+                    let dr = dg.wrapping_add(drdg);
+                    let db = dg.wrapping_add(dbdg);
+                    prev_pixel.wrapping_add(dr, dg, db)
+                };
+                skip_two_bits!(map(parse_chunk, to_pixel))(bytes)?
+            }
+            RUN::START..=RUN::END => {
+                let (rest, run) = skip_two_bits!(map(take(6_usize), |v: usize| v + 1))(bytes)?;
+                (0..run).for_each(|_| image_data.extend_from_slice(&prev_pixel.flat()));
+                bytes = rest;
+                continue;
+            }
+        };
+        bytes = rest;
+        image_data.extend_from_slice(&pixel.flat());
+        color_index_array[pixel.hash()] = pixel;
+        prev_pixel = pixel;
+    }
+    let (bytes, _) = tag(END_MARKER)(bytes)?;
+    Ok((bytes, image_data))
 }
