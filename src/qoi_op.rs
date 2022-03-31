@@ -1,16 +1,9 @@
-const fn two_bit_op_start(op: u8) -> u8 {
-    op << 6
-}
-const fn two_bit_op_end(op: u8) -> u8 {
-    (op << 6) | 0b00111111
-}
-
 macro_rules! two_bit_op {
     ( $name:ident, $value:expr ) => {
         #[allow(non_snake_case)]
         pub mod $name {
-            pub const START: u8 = super::two_bit_op_start($value);
-            pub const END: u8 = super::two_bit_op_end($value);
+            pub const START: u8 = $value << 6;
+            pub const END: u8 = ($value << 6) | 0b00111111;
         }
     };
 }
