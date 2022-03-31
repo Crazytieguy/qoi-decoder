@@ -12,7 +12,7 @@ use nom::{
     combinator::map,
     number::complete::{be_u32, be_u8},
     sequence::{preceded, tuple},
-    IResult,
+    IResult, Parser,
 };
 use qoi_op_codes::*;
 mod qoi_op_codes;
@@ -88,13 +88,10 @@ impl ImageData {
     }
 }
 
-macro_rules! skip_two_bits {
-    ($parser:expr) => {
-        bits::<_, _, nom::error::Error<(&[u8], usize)>, _, _>(preceded::<_, u8, _, _, _, _>(
-            take(2_usize),
-            $parser,
-        ))
-    };
+fn skip_two_bits<'a, O>(
+    parser: impl Parser<(&'a [u8], usize), O, nom::error::Error<(&'a [u8], usize)>>,
+) -> impl FnMut(&'a [u8]) -> IResult<&[u8], O> {
+    bits(preceded::<_, u8, _, _, _, _>(take(2_usize), parser))
 }
 
 fn parse_image_data(mut bytes: &[u8], image_data_len: usize) -> IResult<&[u8], Vec<u8>> {
@@ -103,27 +100,27 @@ fn parse_image_data(mut bytes: &[u8], image_data_len: usize) -> IResult<&[u8], V
     let mut prev_pixel = Pixel::new(0, 0, 0, 255);
     let n_bit_diff = |n: usize| map(take(n), move |diff: u8| diff.wrapping_sub(1 << (n - 1)));
     while image_data.len() < image_data_len {
-        let (rest, next_byte) = be_u8(bytes)?;
+        let (_, next_byte) = be_u8(bytes)?;
         let (rest, pixel) = match next_byte {
             RGB => {
                 let parse_chunk = tuple((be_u8, be_u8, be_u8));
                 let to_pixel = |(r, g, b)| Pixel::new(r, g, b, prev_pixel.a);
-                map(parse_chunk, to_pixel)(rest)?
+                map(parse_chunk, to_pixel)(&bytes[1..])?
             }
             RGBA => {
                 let parse_chunk = tuple((be_u8, be_u8, be_u8, be_u8));
                 let to_pixel = |(r, g, b, a)| Pixel::new(r, g, b, a);
-                map(parse_chunk, to_pixel)(rest)?
+                map(parse_chunk, to_pixel)(&bytes[1..])?
             }
             INDEX::START..=INDEX::END => {
                 let parse_chunk = take(6_usize);
                 let to_pixel = |idx: usize| color_index_array[idx];
-                skip_two_bits!(map(parse_chunk, to_pixel))(bytes)?
+                skip_two_bits(map(parse_chunk, to_pixel))(bytes)?
             }
             DIFF::START..=DIFF::END => {
                 let parse_chunk = tuple((n_bit_diff(2), n_bit_diff(2), n_bit_diff(2)));
                 let to_pixel = |(dr, dg, db)| prev_pixel.wrapping_add(dr, dg, db);
-                skip_two_bits!(map(parse_chunk, to_pixel))(bytes)?
+                skip_two_bits(map(parse_chunk, to_pixel))(bytes)?
             }
             LUMA::START..=LUMA::END => {
                 let parse_chunk = tuple((n_bit_diff(6), n_bit_diff(4), n_bit_diff(4)));
@@ -132,10 +129,10 @@ fn parse_image_data(mut bytes: &[u8], image_data_len: usize) -> IResult<&[u8], V
                     let db = dg.wrapping_add(dbdg);
                     prev_pixel.wrapping_add(dr, dg, db)
                 };
-                skip_two_bits!(map(parse_chunk, to_pixel))(bytes)?
+                skip_two_bits(map(parse_chunk, to_pixel))(bytes)?
             }
             RUN::START..=RUN::END => {
-                let (rest, run) = skip_two_bits!(map(take(6_usize), |v: usize| v + 1))(bytes)?;
+                let (rest, run) = skip_two_bits(map(take(6_usize), |v: usize| v + 1))(bytes)?;
                 let flat_pixel = prev_pixel.flat();
                 (0..run).for_each(|_| image_data.extend_from_slice(&flat_pixel));
                 bytes = rest;
