@@ -1,10 +1,5 @@
 use clap::Parser;
-use std::{
-    error::Error,
-    fs::File,
-    io::{BufReader, BufWriter},
-    path::PathBuf,
-};
+use std::{error::Error, fs::File, path::PathBuf};
 /// A Quite Ok Image format decoder.
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
@@ -18,9 +13,9 @@ struct Cli {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Cli::parse();
-    let input_buf = BufReader::new(File::open(args.input)?);
-    let image_data = qoi_decoder::ImageData::decode(input_buf)?;
-    let out_file_buf = BufWriter::new(File::create(args.output)?);
-    image_data.write_png_file(out_file_buf)?;
+    let input_reader = File::open(args.input)?;
+    let image_data = qoi_decoder::ImageData::decode(input_reader)?;
+    let out_writer = File::create(args.output)?;
+    image_data.write_png_file(out_writer)?;
     Ok(())
 }

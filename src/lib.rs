@@ -2,7 +2,7 @@
 
 use std::{
     error::Error,
-    io::{BufRead, Write},
+    io::{Read, Write},
 };
 
 use derive_new::new;
@@ -68,7 +68,7 @@ pub struct ImageData {
 }
 
 impl ImageData {
-    pub fn decode(mut input_buf: impl BufRead) -> Result<Self, Box<dyn Error>> {
+    pub fn decode(mut input_buf: impl Read) -> Result<Self, Box<dyn Error>> {
         let mut bytes = Vec::new();
         input_buf.read_to_end(&mut bytes)?;
 
